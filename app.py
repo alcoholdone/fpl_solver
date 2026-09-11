@@ -324,7 +324,7 @@ try:
                             "ความเสี่ยง": p["risk"],
                             "xP": p["xp_by_gw"][gw]
                         })
-                    st.dataframe(pd.DataFrame(starters_data), hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame(starters_data), hide_index=True, width='stretch')
 
                     if plan["chip"] == "BB":
                         st.info("🎉 เปิดใช้ Bench Boost แต้มสำรองทุกคนถูกนับรวม")
@@ -343,7 +343,7 @@ try:
                                 "ความเสี่ยง": p["risk"],
                                 "xP": p["xp_by_gw"][gw]
                             })
-                        st.dataframe(pd.DataFrame(bench_data), hide_index=True, use_container_width=True)
+                        st.dataframe(pd.DataFrame(bench_data), hide_index=True, width='stretch')
 
     # -------------------------------------------------------------------------
     # TAB 2: TRANSFER CALCULATOR
