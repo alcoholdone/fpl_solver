@@ -2,35 +2,70 @@ import math
 import requests
 from config import BASE_URL, HEADERS, POSITION_MAP, HORIZON_WEEKS
 
-# กฎการคิดคะแนนทางการของ FPL
-GOAL_POINTS = {1: 6, 2: 6, 3: 5, 4: 4}
-CS_POINTS   = {1: 4, 2: 4, 3: 1, 4: 0}
+# กฎการคิดคะแนนตามกติกาทางการของ FPL
+GOAL_POINTS = {1: 6, 2: 6, 3: 5, 4: 4}  # GKP: 6, DEF: 6, MID: 5, FWD: 4
+CS_POINTS = {1: 4, 2: 4, 3: 1, 4: 0}  # GKP: 4, DEF: 4, MID: 1, FWD: 0
 
 
 # ==========================================
-# 1. CUSTOM xP & STATS ENGINE
+# 1. TEAM STRENGTH & MATCH FACTOR ENGINE
 # ==========================================
-def get_fixture_factors(fdr: int, is_home: bool = True) -> tuple[float, float, float]:
-    fdr_defensive_table = {
-        1: (0.45, 0.85),
-        2: (0.38, 1.05),
-        3: (0.28, 1.35),
-        4: (0.18, 1.75),
-        5: (0.10, 2.20)
-    }
-    base_cs, base_gc = fdr_defensive_table.get(fdr, (0.28, 1.35))
+def calculate_match_factors(
+        player_team_id: int,
+        opp_team_id: int,
+        is_home: bool,
+        teams_data: dict,
+        fdr_fallback: int = 3
+) -> tuple[float, float, float]:
+    """
+    คำนวณตัวคูณเกมรุกและโอกาสคลีนชีตจากการปะทะกันของ Attack vs Defence Rating
+    (แทนที่ค่า FDR 1-5 แบบเดิมที่ประเมินคู่บิ๊กแมตช์หยาบเกินไป)
+    Returns: (attack_multiplier, clean_sheet_probability, expected_goals_conceded)
+    """
+    p_team = teams_data.get(player_team_id)
+    opp_team = teams_data.get(opp_team_id)
 
-    home_boost = 1.12 if is_home else 0.88
-    cs_prob = min(0.60, base_cs * home_boost)
-    expected_gc = base_gc / home_boost
+    # Fallback กรณีไม่มีข้อมูล Rating
+    if not p_team or not opp_team:
+        base_mult = {1: 1.25, 2: 1.15, 3: 1.00, 4: 0.85, 5: 0.70}.get(fdr_fallback, 1.0)
+        return base_mult, 0.28, 1.35
 
-    fdr_attack_table = {1: 1.25, 2: 1.15, 3: 1.00, 4: 0.85, 5: 0.70}
-    attack_mult = fdr_attack_table.get(fdr, 1.00) * (1.08 if is_home else 0.92)
+    # 1. ดึงพลังรุก-รับแยกตามเงื่อนไข เหย้า / เยือน
+    if is_home:
+        my_att = p_team["att_home"]
+        my_def = p_team["def_home"]
+        opp_att = opp_team["att_away"]
+        opp_def = opp_team["def_away"]
+        home_boost = 1.08
+    else:
+        my_att = p_team["att_away"]
+        my_def = p_team["def_away"]
+        opp_att = opp_team["att_home"]
+        opp_def = opp_team["def_home"]
+        home_boost = 0.92
+
+    # 2. ความได้เปรียบเกมรุก: พลังรุกทีมเรา เทียบกับ พลังรับคู่แข่ง
+    att_ratio = (my_att / max(1.0, opp_def)) * home_boost
+    attack_mult = round(max(0.65, min(1.45, att_ratio)), 2)
+
+    # 3. ความได้เปรียบเกมรับ: พลังรับทีมเรา เทียบกับ พลังรุกคู่แข่ง
+    def_ratio = (my_def / max(1.0, opp_att)) * (1.12 if is_home else 0.88)
+
+    # คำนวณความน่าจะเป็นของคลีนชีต (CS Prob: 8% - 65%)
+    base_cs = 0.28 * def_ratio
+    cs_prob = round(max(0.08, min(0.65, base_cs)), 2)
+
+    # ประตูที่คาดว่าจะเสีย (Expected Goals Conceded: 0.5 - 3.0 ประตู)
+    expected_gc = round(max(0.5, min(3.0, 1.35 / def_ratio)), 2)
 
     return attack_mult, cs_prob, expected_gc
 
 
 def sanitize_stat_per_90(raw_val: any, minutes: int, default_cap: float = 1.0) -> float:
+    """
+    ลดอคติกลุ่มตัวอย่างเล็ก (Bayesian Shrinkage)
+    หากลงเล่นไม่ถึง 270 นาที (3 นัด) สถิติ per 90 จะถูกดึงเข้าหาค่ามาตรฐาน
+    """
     try:
         val = float(raw_val or 0.0)
     except (ValueError, TypeError):
@@ -44,13 +79,15 @@ def sanitize_stat_per_90(raw_val: any, minutes: int, default_cap: float = 1.0) -
 
 
 def calculate_player_custom_xp(
-    el: dict,
-    xmins: float,
-    fdr: int = 3,
-    is_home: bool = True,
-    xg_weight: float = 1.0,
-    cs_weight: float = 1.0
+        el: dict,
+        xmins: float,
+        attack_mult: float,
+        cs_prob: float,
+        expected_gc: float,
+        xg_weight: float = 1.0,
+        cs_weight: float = 1.0
 ) -> float:
+    """คำนวณแต้มคาดหวัง (xP) จากสถิติเชิงลึกและ Match Factors ล่าสุด"""
     if xmins <= 0.0:
         return 0.0
 
@@ -58,11 +95,11 @@ def calculate_player_custom_xp(
     total_minutes = el.get("minutes", 0)
     mins_ratio = xmins / 90.0
 
-    attack_mult, cs_prob, expected_gc = get_fixture_factors(fdr, is_home)
-
+    # 1. Appearance Points
     p_play_60 = 1.0 / (1.0 + math.exp(-0.2 * (xmins - 55.0)))
     appearance_xp = (p_play_60 * 2.0) + ((1.0 - p_play_60) * 1.0)
 
+    # 2. Attacking Points
     xg90 = sanitize_stat_per_90(el.get("expected_goals_per_90"), total_minutes, default_cap=1.2)
     xa90 = sanitize_stat_per_90(el.get("expected_assists_per_90"), total_minutes, default_cap=0.8)
 
@@ -70,6 +107,7 @@ def calculate_player_custom_xp(
     match_xa = xa90 * mins_ratio * attack_mult * xg_weight
     attacking_xp = (match_xg * GOAL_POINTS[pos_id]) + (match_xa * 3.0)
 
+    # 3. Defensive Points
     match_cs_prob = min(0.95, cs_prob * p_play_60 * cs_weight)
     clean_sheet_xp = match_cs_prob * CS_POINTS[pos_id]
 
@@ -78,28 +116,31 @@ def calculate_player_custom_xp(
         match_gc = expected_gc * mins_ratio
         goals_conceded_penalty = (match_gc / 2.0) * -1.0
 
+    # 4. Saves Points
     save_xp = 0.0
     if pos_id == 1:
         saves90 = sanitize_stat_per_90(el.get("saves_per_90"), total_minutes, default_cap=6.0)
         save_xp = (saves90 * mins_ratio) * 0.33
 
+    # 5. Bonus Points System & Cards
     bonus_xp = (match_xg * 0.6) + (match_xa * 0.4) + (match_cs_prob * 0.3)
     cards_deduction = -0.12 * mins_ratio
 
     total_xp = (
-        appearance_xp
-        + attacking_xp
-        + clean_sheet_xp
-        + goals_conceded_penalty
-        + save_xp
-        + bonus_xp
-        + cards_deduction
+            appearance_xp
+            + attacking_xp
+            + clean_sheet_xp
+            + goals_conceded_penalty
+            + save_xp
+            + bonus_xp
+            + cards_deduction
     )
 
     return round(max(0.0, total_xp), 2)
 
 
 def calculate_xmins(el: dict, team_played: int) -> tuple[float, str]:
+    """คำนวณนาทีลงเล่นคาดหวัง (xMins) และจัดระดับความเสี่ยงโรเตชัน"""
     chance = el.get("chance_of_playing_next_round")
     if el["status"] in ["i", "s", "u"]:
         avail_factor = 0.0 if chance is None else (chance / 100.0)
@@ -140,16 +181,13 @@ def calculate_xmins(el: dict, team_played: int) -> tuple[float, str]:
 # 2. MARKET PRICE PREDICTOR ENGINE
 # ==========================================
 def calculate_price_trend(el: dict, total_managers: int) -> dict:
-    """
-    คำนวณการย้ายตัวสุทธิ (Net Transfers) และประมาณการโอกาสราคาขึ้น-ลง
-    """
+    """คำนวณการย้ายตัวสุทธิ (Net Transfers) และประเมินโอกาสราคาปรับขึ้น-ลง"""
     tin = el.get("transfers_in_event", 0)
     tout = el.get("transfers_out_event", 0)
     net_transfers = tin - tout
     ownership_pct = float(el.get("selected_by_percent") or 0.0)
     ownership_count = max(2000, int(total_managers * (ownership_pct / 100.0)))
 
-    # เพดานเป้าหมายสำหรับการปรับราคา (Dynamic Threshold)
     rise_threshold = max(35000, int(ownership_count * 0.065))
     fall_threshold = -max(25000, int(ownership_count * 0.055))
 
@@ -158,7 +196,6 @@ def calculate_price_trend(el: dict, total_managers: int) -> dict:
     else:
         progress = round((net_transfers / abs(fall_threshold)) * 100.0, 1)
 
-    # จำแนกสถานะ
     if progress >= 95.0:
         status = "🚀 เสี่ยงขึ้นคืนนี้"
     elif progress >= 55.0:
@@ -184,6 +221,7 @@ def calculate_price_trend(el: dict, total_managers: int) -> dict:
 # 3. DATA PIPELINE & API CALLS
 # ==========================================
 def get_fixture_details(target_gws: list, teams_dict: dict) -> dict:
+    """ดึงตารางการแข่งขันล่วงหน้าพร้อม Opponent Team ID สำหรับแมตริกซ์พลังทีม"""
     fixtures_res = requests.get(f"{BASE_URL}/fixtures/", headers=HEADERS).json()
     fixture_details = {tid: {gw: [] for gw in target_gws} for tid in teams_dict}
 
@@ -194,12 +232,14 @@ def get_fixture_details(target_gws: list, teams_dict: dict) -> dict:
             h_diff, a_diff = fix["team_h_difficulty"], fix["team_a_difficulty"]
 
             fixture_details[h_team][gw].append({
+                "opp_id": a_team,
                 "opp": teams_dict[a_team],
                 "fdr": h_diff,
                 "is_home": True,
                 "label": f"vs {teams_dict[a_team]} (H) [FDR {h_diff}]"
             })
             fixture_details[a_team][gw].append({
+                "opp_id": h_team,
                 "opp": teams_dict[h_team],
                 "fdr": a_diff,
                 "is_home": False,
@@ -210,6 +250,7 @@ def get_fixture_details(target_gws: list, teams_dict: dict) -> dict:
 
 
 def fetch_user_chips_status(team_id: int, target_gw: int) -> dict:
+    """ตรวจสอบประวัติชิปที่ใช้งานไปแล้วจริงจาก API"""
     try:
         history_res = requests.get(f"{BASE_URL}/entry/{team_id}/history/", headers=HEADERS).json()
         used_chips = [c["name"] for c in history_res.get("chips", [])]
@@ -227,11 +268,13 @@ def fetch_user_chips_status(team_id: int, target_gw: int) -> dict:
 
 
 def fetch_fpl_data_multi(team_id: int, xg_weight: float = 1.0, cs_weight: float = 1.0):
-    print(f"[1/4] กำลังดึงข้อมูลกลางและสถิติเชิงลึก (xG/xA) จาก FPL API...")
+    """ฟังก์ชันแกนหลัก: รวบรวมข้อมูล, วิเคราะห์ Team Strength, DGW/BGW และราคาตลาด"""
+    print(f"[1/4] กำลังดึงข้อมูลกลางและคำนวณ Team Strength Ratings...")
     bootstrap = requests.get(f"{BASE_URL}/bootstrap-static/", headers=HEADERS).json()
 
     total_managers = bootstrap.get("total_players", 10_500_000)
 
+    # 1. ระบุ Deadline และ Gameweek ถัดไปอย่างแม่นยำ
     next_event = next((e for e in bootstrap["events"] if e.get("is_next")), None)
     if next_event:
         next_gw = next_event["id"]
@@ -253,12 +296,23 @@ def fetch_fpl_data_multi(team_id: int, xg_weight: float = 1.0, cs_weight: float 
     target_gws = sorted(list(set(target_gws)))
     pick_gw = max(1, next_gw - 1)
 
+    # 2. สร้างโครงสร้างข้อมูลพลังทีม (Attack vs Defence Ratings)
     teams_dict = {t["id"]: t["short_name"] for t in bootstrap["teams"]}
+    teams_strength = {
+        t["id"]: {
+            "att_home": t.get("strength_attack_home", 1100),
+            "att_away": t.get("strength_attack_away", 1100),
+            "def_home": t.get("strength_defence_home", 1100),
+            "def_away": t.get("strength_defence_away", 1100),
+        }
+        for t in bootstrap["teams"]
+    }
     teams_played = {t["id"]: t.get("played", pick_gw) for t in bootstrap["teams"]}
     element_costs = {el["id"]: el["now_cost"] / 10.0 for el in bootstrap["elements"]}
 
     fixture_details = get_fixture_details(target_gws, teams_dict)
 
+    # 3. ตรวจจับ DGW และ BGW
     dgw_bgw_info = {}
     for gw in target_gws:
         dgw_teams = [teams_dict[tid] for tid in teams_dict if len(fixture_details[tid].get(gw, [])) >= 2]
@@ -275,7 +329,8 @@ def fetch_fpl_data_multi(team_id: int, xg_weight: float = 1.0, cs_weight: float 
     my_player_ids = [p["element"] for p in current_picks]
 
     selling_prices = {
-        p["element"]: (p.get("selling_price") / 10.0) if p.get("selling_price") is not None else element_costs.get(p["element"], 0.0)
+        p["element"]: (p.get("selling_price") / 10.0) if p.get("selling_price") is not None else element_costs.get(
+            p["element"], 0.0)
         for p in current_picks
     }
 
@@ -285,7 +340,7 @@ def fetch_fpl_data_multi(team_id: int, xg_weight: float = 1.0, cs_weight: float 
     print(f"[3/4] ตรวจสอบสิทธิ์ชิปที่เหลืออยู่จากประวัติการแข่งขัน...")
     chips_available = fetch_user_chips_status(team_id, next_gw)
 
-    print(f"[4/4] กำลังประมวลผล Custom xP และวิเคราะห์ Market Price Trends...")
+    print(f"[4/4] คำนวณ Match Factors และ xP ด้วย Team Strength Matrix...")
     players = []
     for el in bootstrap["elements"]:
         pid = el["id"]
@@ -317,11 +372,21 @@ def fetch_fpl_data_multi(team_id: int, xg_weight: float = 1.0, cs_weight: float 
                 total_gw_xp = 0.0
                 labels = []
                 for m in matches:
+                    # ประเมินพลังรุกชนรับด้วย Team Ratings
+                    att_mult, cs_p, exp_gc = calculate_match_factors(
+                        player_team_id=el["team"],
+                        opp_team_id=m["opp_id"],
+                        is_home=m["is_home"],
+                        teams_data=teams_strength,
+                        fdr_fallback=m["fdr"]
+                    )
+
                     total_gw_xp += calculate_player_custom_xp(
                         el=el,
                         xmins=xmins,
-                        fdr=m["fdr"],
-                        is_home=m["is_home"],
+                        attack_mult=att_mult,
+                        cs_prob=cs_p,
+                        expected_gc=exp_gc,
                         xg_weight=xg_weight,
                         cs_weight=cs_weight
                     )
@@ -353,18 +418,16 @@ def fetch_fpl_data_multi(team_id: int, xg_weight: float = 1.0, cs_weight: float 
 
     return players, my_player_ids, bank, initial_ft, target_gws, chips_available, deadline_info, dgw_bgw_info
 
+
 # ==========================================
 # 4. MINI-LEAGUE & EO ANALYSIS ENGINE
 # ==========================================
 def fetch_minileague_eo(league_id: int, pick_gw: int, max_managers: int = 25):
-    """
-    ดึงรายชื่อทีมในมินิลีก และคำนวณ Effective Ownership (EO) จากไลน์อัปและกัปตันจริง
-    """
+    """ดึงข้อมูลคู่แข่งในมินิลีกและคำนวณสถิติ Effective Ownership (EO) ตามไลน์อัปจริง"""
     if not league_id or league_id <= 0:
         return None
 
     try:
-        # 1. ดึงตารางคะแนนมินิลีก
         league_res = requests.get(
             f"{BASE_URL}/leagues-classic/{league_id}/standings/",
             headers=HEADERS,
@@ -381,11 +444,10 @@ def fetch_minileague_eo(league_id: int, pick_gw: int, max_managers: int = 25):
             return None
 
         total_mgrs = len(managers)
-        eo_counts = {}   # เก็บผลรวม multiplier ของนักเตะแต่ละคน
-        own_counts = {}  # เก็บจำนวนคนถือใน 15 คน
-        cap_counts = {}  # เก็บจำนวนคนเลือกเป็นกัปตัน
+        eo_counts = {}
+        own_counts = {}
+        cap_counts = {}
 
-        # 2. ดึง 15 ตัวจริงของแต่ละคนใน Gameweek ล่าสุด
         for mgr in managers:
             entry_id = mgr["entry"]
             picks_url = f"{BASE_URL}/entry/{entry_id}/event/{pick_gw}/picks/"
@@ -396,15 +458,14 @@ def fetch_minileague_eo(league_id: int, pick_gw: int, max_managers: int = 25):
 
             for pick in p_res["picks"]:
                 pid = pick["element"]
-                multiplier = pick.get("multiplier", 1)  # 0=สำรอง, 1=ตัวจริง, 2=กัปตัน, 3=ทริปเปิลกัปตัน
+                multiplier = pick.get("multiplier", 1)
                 is_cap = pick.get("is_captain", False)
 
                 eo_counts[pid] = eo_counts.get(pid, 0) + multiplier
-                own_counts[pid] = own_counts.get(pid, 0) + (1 if multiplier > 0 or multiplier == 0 else 0)
+                own_counts[pid] = own_counts.get(pid, 0) + (1 if multiplier >= 0 else 0)
                 if is_cap:
                     cap_counts[pid] = cap_counts.get(pid, 0) + 1
 
-        # 3. คำนวณเป็นเปอร์เซ็นต์
         league_eo_data = {}
         for pid, total_mult in eo_counts.items():
             league_eo_data[pid] = {
@@ -421,5 +482,5 @@ def fetch_minileague_eo(league_id: int, pick_gw: int, max_managers: int = 25):
         }
 
     except Exception as e:
-        print(f"[Mini-League Error] ไม่สามารถดึงข้อมูลลีก {league_id} ได้: {e}")
+        print(f"[Mini-League Error] ไม่สามารถดึงข้อมูล League ID {league_id}: {e}")
         return None
