@@ -25,7 +25,7 @@ HEADERS = {
 MY_TEAM_ID = int(get_config_val("DEFAULT_TEAM_ID", 0))
 
 # การวางแผนระยะยาว (Multi-Gameweek)
-HORIZON_WEEKS = 2          # วางแผนล่วงหน้า 3 สัปดาห์
+HORIZON_WEEKS = 3          # วางแผนล่วงหน้า 3 สัปดาห์
 DISCOUNT_FACTOR = 0.90     # อัตราลดทอนความไม่แน่นอนสัปดาห์ถัดๆ ไป (10%)
 
 # กติกา FPL มาตรฐาน
