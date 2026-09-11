@@ -24,40 +24,40 @@ def load_league_data(league_id: int, pick_gw: int):
 # PITCH VIEW & CARD GENERATOR
 # =============================================================================
 def generate_player_card_html(p: dict, gw: int, captain_id: int, vice_id: int, chip: str, locked_ids: list) -> str:
+    """การ์ดนักเตะแบบ Compact รองรับหน้าจอมือถือ"""
     badge_html = ""
     if p["id"] == captain_id:
         if chip == "TC":
             badge_html = (
-                '<div style="position: absolute; top: -7px; right: -6px; background: #ea580c; color: #fff; '
-                'font-weight: 900; font-size: 8px; padding: 1px 4px; border-radius: 8px; '
-                'border: 1.5px solid #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.3); z-index: 2;">TC</div>'
+                '<div style="position: absolute; top: -6px; right: -5px; background: #ea580c; color: #fff; '
+                'font-weight: 900; font-size: 7.5px; padding: 1px 3px; border-radius: 6px; '
+                'border: 1px solid #fff; z-index: 2;">TC</div>'
             )
         else:
             badge_html = (
-                '<div style="position: absolute; top: -7px; right: -6px; background: #f59e0b; color: #000; '
-                'font-weight: 900; font-size: 9px; width: 17px; height: 17px; border-radius: 50%; '
+                '<div style="position: absolute; top: -6px; right: -5px; background: #f59e0b; color: #000; '
+                'font-weight: 900; font-size: 8px; width: 15px; height: 15px; border-radius: 50%; '
                 'display: flex; align-items: center; justify-content: center; '
-                'border: 1.5px solid #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.3); z-index: 2;">C</div>'
+                'border: 1px solid #fff; z-index: 2;">C</div>'
             )
     elif p["id"] == vice_id:
         badge_html = (
-            '<div style="position: absolute; top: -7px; right: -6px; background: #475569; color: #fff; '
-            'font-weight: 800; font-size: 8px; padding: 1px 3px; border-radius: 8px; '
-            'border: 1.5px solid #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.3); z-index: 2;">VC</div>'
+            '<div style="position: absolute; top: -6px; right: -5px; background: #475569; color: #fff; '
+            'font-weight: 800; font-size: 7.5px; padding: 1px 3px; border-radius: 6px; '
+            'border: 1px solid #fff; z-index: 2;">VC</div>'
         )
 
     lock_html = ""
     if locked_ids and p["id"] in locked_ids:
         lock_html = (
-            '<div style="position: absolute; top: -7px; left: -5px; background: #1e293b; color: #fff; '
-            'font-size: 8px; width: 16px; height: 16px; border-radius: 50%; display: flex; '
-            'align-items: center; justify-content: center; border: 1.5px solid #fff; '
-            'box-shadow: 0 2px 4px rgba(0,0,0,0.3); z-index: 2;">🔒</div>'
+            '<div style="position: absolute; top: -6px; left: -4px; background: #1e293b; color: #fff; '
+            'font-size: 7.5px; width: 14px; height: 14px; border-radius: 50%; display: flex; '
+            'align-items: center; justify-content: center; border: 1px solid #fff; z-index: 2;">🔒</div>'
         )
 
     dgw_badge = ""
     if p.get("is_dgw", {}).get(gw, False):
-        dgw_badge = '<span style="background: #065f46; color: #6ee7b7; font-size: 9px; font-weight: 800; padding: 0 3px; border-radius: 3px; margin-left: 3px;">2x</span>'
+        dgw_badge = '<span style="background: #065f46; color: #6ee7b7; font-size: 8px; font-weight: 800; padding: 0 2px; border-radius: 2px; margin-left: 2px;">2x</span>'
 
     fix = p["fixtures"].get(gw, "-")
     xp = p["xp_by_gw"].get(gw, 0.0)
@@ -66,21 +66,21 @@ def generate_player_card_html(p: dict, gw: int, captain_id: int, vice_id: int, c
     border_color = pos_colors.get(p["pos_id"], "#64748b")
 
     card = (
-        f'<div style="position: relative; background: #ffffff; color: #0f172a; border-radius: 7px; '
-        f'padding: 6px 4px 5px 4px; min-width: 72px; max-width: 92px; flex: 1; text-align: center; '
-        f'box-shadow: 0 3px 6px rgba(0,0,0,0.28); border-top: 3.5px solid {border_color}; '
-        f'font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; box-sizing: border-box; margin: 4px 2px;">'
+        f'<div style="position: relative; background: #ffffff; color: #0f172a; border-radius: 6px; '
+        f'padding: 4px 2px 3px 2px; min-width: 58px; max-width: 72px; flex: 1; text-align: center; '
+        f'box-shadow: 0 2px 4px rgba(0,0,0,0.25); border-top: 3px solid {border_color}; '
+        f'font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; box-sizing: border-box; margin: 2px 1px;">'
         f'{badge_html}'
         f'{lock_html}'
-        f'<div style="font-weight: 800; font-size: 11px; white-space: nowrap; overflow: hidden; '
+        f'<div style="font-weight: 800; font-size: 9.5px; white-space: nowrap; overflow: hidden; '
         f'text-overflow: ellipsis; padding: 0 1px; color: #0f172a;" title="{p["web_name"]}">'
         f'{p["web_name"]}{dgw_badge}'
         f'</div>'
-        f'<div style="font-size: 9px; color: #64748b; margin: 1px 0 3px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{fix}">'
-        f'{p["team"]} | {fix}'
+        f'<div style="font-size: 8px; color: #64748b; margin: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{fix}">'
+        f'{p["team"]}'
         f'</div>'
-        f'<div style="background: #0f172a; color: #38bdf8; font-weight: 700; font-size: 10px; border-radius: 3px; padding: 1.5px 0;">'
-        f'{xp:.1f} xP'
+        f'<div style="background: #0f172a; color: #38bdf8; font-weight: 700; font-size: 9px; border-radius: 2px; padding: 1px 0;">'
+        f'{xp:.1f}'
         f'</div>'
         f'</div>'
     )
@@ -103,12 +103,12 @@ def render_pitch_view(plan: dict, locked_ids: list = None):
 
     def make_row(players):
         cards = "".join([generate_player_card_html(p, gw, cap_id, vice_id, chip, locked_ids) for p in players])
-        return f'<div style="display: flex; justify-content: center; align-items: center; gap: 4px; margin: 6px 0; width: 100%;">{cards}</div>'
+        return f'<div style="display: flex; justify-content: center; align-items: center; gap: 2px; margin: 4px 0; width: 100%;">{cards}</div>'
 
     pitch_html = textwrap.dedent(f"""
-<div style="background: radial-gradient(circle, #1e5e2e 0%, #14401f 100%); border: 2px solid rgba(255,255,255,0.25); border-radius: 12px; padding: 14px 6px 10px 6px; position: relative; box-shadow: inset 0 0 16px rgba(0,0,0,0.5); margin-bottom: 10px; width: 100%; box-sizing: border-box;">
-<div style="position: absolute; top: 50%; left: 5%; right: 5%; height: 1px; background: rgba(255,255,255,0.15);"></div>
-<div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 60px; height: 60px; border: 1px solid rgba(255,255,255,0.15); border-radius: 50%;"></div>
+<div style="background: radial-gradient(circle, #1e5e2e 0%, #14401f 100%); border: 1.5px solid rgba(255,255,255,0.25); border-radius: 10px; padding: 10px 4px 8px 4px; position: relative; box-shadow: inset 0 0 14px rgba(0,0,0,0.5); margin-bottom: 8px; width: 100%; box-sizing: border-box; overflow-x: auto;">
+<div style="position: absolute; top: 50%; left: 3%; right: 3%; height: 1px; background: rgba(255,255,255,0.15);"></div>
+<div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 46px; height: 46px; border: 1px solid rgba(255,255,255,0.15); border-radius: 50%;"></div>
 {make_row(gkps)}
 {make_row(defs)}
 {make_row(mids)}
@@ -117,15 +117,15 @@ def render_pitch_view(plan: dict, locked_ids: list = None):
 """).strip()
 
     bench_cards = "".join([
-        f'<div style="display: flex; flex-direction: column; align-items: center; min-width: 72px; max-width: 92px; flex: 1;">'
-        f'<span style="color: #94a3b8; font-size: 10px; font-weight: 600; margin-bottom: 2px;">{label}</span>'
+        f'<div style="display: flex; flex-direction: column; align-items: center; min-width: 58px; max-width: 72px; flex: 1;">'
+        f'<span style="color: #94a3b8; font-size: 8.5px; font-weight: 600; margin-bottom: 1px;">{label}</span>'
         f'{generate_player_card_html(p, gw, cap_id, vice_id, chip, locked_ids)}'
         f'</div>'
         for label, p in zip(["GK Sub", "Bench 1", "Bench 2", "Bench 3"], bench)
     ])
 
     bench_html = textwrap.dedent(f"""
-<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 10px 4px 8px 4px; display: flex; justify-content: center; gap: 4px; width: 100%; box-sizing: border-box;">
+<div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 6px 2px 4px 2px; display: flex; justify-content: center; gap: 2px; width: 100%; box-sizing: border-box; overflow-x: auto;">
 {bench_cards}
 </div>
 """).strip()
@@ -136,7 +136,7 @@ def render_pitch_view(plan: dict, locked_ids: list = None):
     if chip == "BB":
         st.info("🎉 **Bench Boost Active:** แต้มจากสำรองทุกคนถูกนับรวมในคะแนนจริง")
     else:
-        st.markdown("**🪑 ม้านั่งสำรอง (Bench Order):**")
+        st.markdown("**🪑 ม้านั่งสำรอง:**")
         st.markdown(bench_html, unsafe_allow_html=True)
 
 def render_deadline_banner(deadline_utc_str: str, gw_name: str):
@@ -251,14 +251,18 @@ try:
     ])
 
     # -------------------------------------------------------------------------
-    # TAB 1: ROADMAP & SOLVER
+    # TAB 1: ROADMAP & SOLVER (Responsive Single-GW Tabs)
     # -------------------------------------------------------------------------
     with tab1:
         st.subheader("🤖 คำแนะนำจากสมองกล MILP Solver")
         if locked_ids or banned_ids:
             st.info(f"📌 มีผลบังคับ: Lock {len(locked_ids)} คน | Ban {len(banned_ids)} คน")
 
-        view_mode = st.radio("รูปแบบการแสดงผล:", ["⚽ ผังสนาม (Pitch View)", "📋 ตารางสถิติ (Table View)"], horizontal=True)
+        view_mode = st.radio(
+            "รูปแบบการแสดงผล:",
+            ["⚽ ผังสนาม (Pitch View)", "📋 ตารางสถิติ (Table View)"],
+            horizontal=True
+        )
 
         with st.spinner("กำลังแก้สมการหาส่วนผสมที่ดีที่สุด..."):
             plans = solve_multi_period_fpl(
@@ -267,14 +271,20 @@ try:
                 dgw_bgw_info=dgw_bgw_info
             )
 
-        cols = st.columns(len(plans))
+        # สลับเป็น Sub-Tabs แทน st.columns เพื่อให้แสดงผลเต็มหน้าจอมือถือ
+        gw_tab_labels = [
+            f"📍 GW {plan['gw']}" + (f" 🔥 {plan['chip']}" if plan['chip'] else "")
+            for plan in plans
+        ]
+        gw_tabs = st.tabs(gw_tab_labels)
+
         for idx, plan in enumerate(plans):
             gw = plan["gw"]
-            with cols[idx]:
-                chip_text = f" | 🔥 CHIP: {plan['chip']}" if plan['chip'] else ""
-                st.markdown(f"### 📍 GW {gw} {chip_text}")
-                st.caption(f"Free Transfers: **{plan['ft_available']}** | เงินคงคลัง: **£{plan['bank_remaining']:.1f}M**")
+            with gw_tabs[idx]:
+                st.caption(
+                    f"Free Transfers: **{plan['ft_available']}** | เงินคงคลัง: **£{plan['bank_remaining']:.1f}M**")
 
+                # การย้ายตัว
                 st.markdown("**🔄 แผนการย้ายตัว:**")
                 if plan["chip"] == "FH":
                     st.warning("⚡ **Free Hit Active:** ย้ายชั่วคราวสัปดาห์นี้เท่านั้น")
@@ -283,12 +293,15 @@ try:
                     st.info("Roll Transfer (ไม่ย้ายตัว)")
                 else:
                     for out_p in plan["transfers_out"]:
-                        st.error(f"🔴 {'สลับออก' if plan['chip'] == 'FH' else 'ขาย'}: **{out_p['web_name']}** ({out_p['team']})")
+                        st.error(
+                            f"🔴 {'สลับออก' if plan['chip'] == 'FH' else 'ขาย'}: **{out_p['web_name']}** ({out_p['team']})")
                     for in_p in plan["transfers_in"]:
-                        st.success(f"🟢 {'ดึงเข้า' if plan['chip'] == 'FH' else 'ซื้อ'}: **{in_p['web_name']}** ({in_p['team']})")
+                        st.success(
+                            f"🟢 {'ดึงเข้า' if plan['chip'] == 'FH' else 'ซื้อ'}: **{in_p['web_name']}** ({in_p['team']})")
                     if plan["hits"] > 0:
                         st.warning(f"⚠️ เสียแต้มลบ: -{plan['hits'] * 4} pts")
 
+                # แสดงผลตามโหมด
                 if view_mode == "⚽ ผังสนาม (Pitch View)":
                     render_pitch_view(plan, locked_ids)
                 else:
@@ -311,7 +324,7 @@ try:
                             "ความเสี่ยง": p["risk"],
                             "xP": p["xp_by_gw"][gw]
                         })
-                    st.dataframe(pd.DataFrame(starters_data), hide_index=True, width='stretch')
+                    st.dataframe(pd.DataFrame(starters_data), hide_index=True, use_container_width=True)
 
                     if plan["chip"] == "BB":
                         st.info("🎉 เปิดใช้ Bench Boost แต้มสำรองทุกคนถูกนับรวม")
@@ -330,7 +343,7 @@ try:
                                 "ความเสี่ยง": p["risk"],
                                 "xP": p["xp_by_gw"][gw]
                             })
-                        st.dataframe(pd.DataFrame(bench_data), hide_index=True, width='stretch')
+                        st.dataframe(pd.DataFrame(bench_data), hide_index=True, use_container_width=True)
 
     # -------------------------------------------------------------------------
     # TAB 2: TRANSFER CALCULATOR
