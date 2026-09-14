@@ -3,7 +3,7 @@ import pandas as pd
 import textwrap
 from datetime import datetime, timezone, timedelta
 from config import MY_TEAM_ID, DEFAULT_LEAGUES
-from fpl_api import fetch_fpl_data_multi, fetch_minileague_eo
+from fpl_api import fetch_fpl_global_market, fetch_fpl_user_squad, fetch_minileague_eo, FPLGameUpdatingError
 from optimizer import solve_multi_period_fpl
 
 st.set_page_config(
@@ -12,9 +12,90 @@ st.set_page_config(
     page_icon="⚽"
 )
 
-@st.cache_data(ttl=300)
-def load_data(team_id: int, xg_weight: float, cs_weight: float):
-    return fetch_fpl_data_multi(team_id, xg_weight=xg_weight, cs_weight=cs_weight)
+# =============================================================================
+# MOBILE-FIRST RESPONSIVE CSS
+# =============================================================================
+st.markdown("""
+<style>
+/* Base typography & containers */
+.main .block-container {
+    max-width: 1200px;
+}
+
+@media (max-width: 768px) {
+    /* Minimize margins on phone screens */
+    .block-container {
+        padding-top: 0.8rem !important;
+        padding-bottom: 1.5rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+    
+    /* Metrics compact scaling */
+    div[data-testid="stMetricValue"] {
+        font-size: 1.15rem !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 0.72rem !important;
+    }
+    
+    /* Responsive columns stack cleanly */
+    [data-testid="column"] {
+        min-width: 48% !important;
+        flex: 1 1 48% !important;
+        margin-bottom: 6px !important;
+    }
+    
+    /* Tab buttons touch-friendly */
+    button[data-baseweb="tab"] {
+        font-size: 0.82rem !important;
+        padding: 5px 8px !important;
+    }
+    
+    /* Pitch Player Card Mobile Scaling */
+    .fpl-card {
+        min-width: 46px !important;
+        max-width: 60px !important;
+        padding: 3px 1px 2px 1px !important;
+        margin: 1px !important;
+    }
+    .fpl-card .card-name {
+        font-size: 8.5px !important;
+    }
+    .fpl-card .card-team {
+        font-size: 7px !important;
+    }
+    .fpl-card .card-xp {
+        font-size: 8px !important;
+        padding: 0px 0 !important;
+    }
+}
+
+/* Horizontal scroll styling */
+.fpl-scroll-x {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+.fpl-scroll-x::-webkit-scrollbar {
+    height: 4px;
+}
+.fpl-scroll-x::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 4px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# 2-Tier Caching: ข้อมูลตลาดกลางแคช 15 นาทีร่วมกันทุกคน ป้องกัน FPL Rate Limit (429)
+@st.cache_data(ttl=900)
+def load_global_market(xg_weight: float, cs_weight: float, horizon_weeks: int = 3):
+    return fetch_fpl_global_market(xg_weight=xg_weight, cs_weight=cs_weight, horizon_weeks=horizon_weeks)
+
+# ข้อมูลผู้ใช้แคชสั้น 2 นาทีเพื่อความสดใหม่ ดึงเฉพาะ Picks และชิป
+@st.cache_data(ttl=120)
+def load_user_squad(team_id: int, _global_market: dict):
+    return fetch_fpl_user_squad(team_id, _global_market)
 
 @st.cache_data(ttl=600)
 def load_league_data(league_id: int, pick_gw: int):
@@ -66,20 +147,20 @@ def generate_player_card_html(p: dict, gw: int, captain_id: int, vice_id: int, c
     border_color = pos_colors.get(p["pos_id"], "#64748b")
 
     card = (
-        f'<div style="position: relative; background: #ffffff; color: #0f172a; border-radius: 6px; '
-        f'padding: 4px 2px 3px 2px; min-width: 58px; max-width: 72px; flex: 1; text-align: center; '
+        f'<div class="fpl-card" style="position: relative; background: #ffffff; color: #0f172a; border-radius: 6px; '
+        f'padding: 4px 2px 3px 2px; min-width: 52px; max-width: 70px; flex: 1; text-align: center; '
         f'box-shadow: 0 2px 4px rgba(0,0,0,0.25); border-top: 3px solid {border_color}; '
         f'font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; box-sizing: border-box; margin: 2px 1px;">'
         f'{badge_html}'
         f'{lock_html}'
-        f'<div style="font-weight: 800; font-size: 9.5px; white-space: nowrap; overflow: hidden; '
+        f'<div class="card-name" style="font-weight: 800; font-size: 9.5px; white-space: nowrap; overflow: hidden; '
         f'text-overflow: ellipsis; padding: 0 1px; color: #0f172a;" title="{p["web_name"]}">'
         f'{p["web_name"]}{dgw_badge}'
         f'</div>'
-        f'<div style="font-size: 8px; color: #64748b; margin: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{fix}">'
+        f'<div class="card-team" style="font-size: 8px; color: #64748b; margin: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{fix}">'
         f'{p["team"]}'
         f'</div>'
-        f'<div style="background: #0f172a; color: #38bdf8; font-weight: 700; font-size: 9px; border-radius: 2px; padding: 1px 0;">'
+        f'<div class="card-xp" style="background: #0f172a; color: #38bdf8; font-weight: 700; font-size: 9px; border-radius: 2px; padding: 1px 0;">'
         f'{xp:.1f}'
         f'</div>'
         f'</div>'
@@ -155,14 +236,14 @@ def render_deadline_banner(deadline_utc_str: str, gw_name: str):
         alert_style = "background-color: #2e1065;" if days >= 1 else "background-color: #7f1d1d;"
         st.markdown(
             f"""
-            <div style="{alert_style} border-radius: 10px; padding: 12px 20px; margin-bottom: 15px; color: white;">
-                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+            <div style="{alert_style} border-radius: 10px; padding: 10px 14px; margin-bottom: 15px; color: white;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                     <div>
-                        <span style="font-size: 1.05rem; font-weight: bold;">⏳ เส้นตายส่งทีม {gw_name}:</span>
-                        <span style="font-size: 0.95rem; margin-left: 8px;">{time_str}</span>
+                        <div style="font-size: 0.95rem; font-weight: bold;">⏳ เส้นตายส่งทีม {gw_name}:</div>
+                        <div style="font-size: 0.85rem; color: #cbd5e1;">{time_str}</div>
                     </div>
-                    <div style="font-size: 1.1rem; font-weight: bold; background: rgba(255,255,255,0.15); padding: 3px 10px; border-radius: 6px;">
-                        เหลือเวลาอีก: {days} วัน {hours} ชม. {minutes} นาที
+                    <div style="font-size: 0.95rem; font-weight: bold; background: rgba(255,255,255,0.18); padding: 4px 10px; border-radius: 6px; white-space: nowrap;">
+                        ⏳ เหลืออีก: {days}ว {hours}ชม {minutes}น
                     </div>
                 </div>
             </div>
@@ -172,22 +253,106 @@ def render_deadline_banner(deadline_utc_str: str, gw_name: str):
     else:
         st.warning(f"⚠️ เส้นตาย {gw_name} ผ่านพ้นไปแล้ว")
 
+def render_strategic_roadmap(plans: list):
+    """การ์ดสรุป Roadmap เส้นทางกลยุทธ์และการจัดสรรงบประมาณ รองรับหน้าจอมือถือ"""
+    total_xp = sum(p["total_xp"] for p in plans)
+
+    steps_html = []
+    for p in plans:
+        gw = p["gw"]
+        chip_badge = f'<span style="background: #ea580c; color: #fff; padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 800; margin-left: 3px;">{p["chip"]}</span>' if p["chip"] else ""
+
+        in_names = [f'<span style="color: #10b981; font-weight: 700;">+{x["web_name"]}</span>' for x in p["transfers_in"]]
+        out_names = [f'<span style="color: #ef4444; font-weight: 700;">-{x["web_name"]}</span>' for x in p["transfers_out"]]
+
+        if not in_names:
+            transfer_desc = '<span style="color: #94a3b8; font-size: 11px;">Roll FT (เก็บโควตา)</span>'
+        else:
+            transfer_desc = '<div style="font-size: 11px; margin: 2px 0;">' + " ".join(in_names + out_names) + '</div>'
+
+        step = (
+            f'<div style="background: rgba(30, 41, 59, 0.75); border: 1px solid rgba(255,255,255,0.12); '
+            f'border-radius: 8px; padding: 8px 10px; min-width: 140px; flex: 1; box-sizing: border-box;">'
+            f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">'
+            f'<span style="font-weight: 800; font-size: 12px; color: #38bdf8;">GW {gw}{chip_badge}</span>'
+            f'<span style="font-size: 11px; color: #fbbf24; font-weight: 700;">£{p["bank_remaining"]:.1f}M</span>'
+            f'</div>'
+            f'{transfer_desc}'
+            f'<div style="font-size: 10px; color: #cbd5e1; margin-top: 3px;">(C) <b>{p["captain"]["web_name"]}</b> | xP: <b>{p["total_xp"]:.1f}</b></div>'
+            f'</div>'
+        )
+        steps_html.append(step)
+
+    all_steps = "".join(steps_html)
+
+    active_chips_in_plan = [f"{p['chip']} (GW {p['gw']})" for p in plans if p['chip']]
+    if active_chips_in_plan:
+        chip_strategy_note = f"🔥 <b>ชิปที่แนะนำเปิด:</b> {', '.join(active_chips_in_plan)}"
+    else:
+        chip_strategy_note = "🛡️ <b>สถานะชิป:</b> เซฟชิปทั้งหมดไว้ใช้สัปดาห์ Double / Blank Gameweek"
+
+    card_html = (
+        f'<div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border: 1.5px solid #334155; '
+        f'border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);">'
+        f'<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;">'
+        f'<div>'
+        f'<span style="font-size: 14px; font-weight: 900; color: #f8fafc;">🗺️ Roadmap เส้นทางกลยุทธ์ ({len(plans)} Gameweeks)</span>'
+        f'<span style="font-size: 12px; color: #94a3b8; margin-left: 6px;">xP รวม: <b style="color: #38bdf8;">{total_xp:.1f} pts</b></span>'
+        f'</div>'
+        f'<div style="font-size: 11px; color: #e2e8f0; background: rgba(255,255,255,0.08); padding: 3px 8px; border-radius: 6px;">'
+        f'{chip_strategy_note}'
+        f'</div>'
+        f'</div>'
+        f'<div class="fpl-scroll-x" style="display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px;">'
+        f'{all_steps}'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(card_html, unsafe_allow_html=True)
+
 # =============================================================================
-# SIDEBAR
+# SIDEBAR & QUERY PARAMS (?team=XXXXXX&league=YYYYYY)
 # =============================================================================
+query_params = st.query_params
+
+# ดึงค่า Team ID จาก URL
+url_team_raw = query_params.get("team")
+default_team_val = MY_TEAM_ID
+if url_team_raw:
+    try:
+        parsed_t = int(url_team_raw)
+        if parsed_t > 0:
+            default_team_val = parsed_t
+    except (ValueError, TypeError):
+        pass
+
+# ดึงค่า League ID จาก URL (รองรับทั้งเดี่ยว "1089641" และหลายลีก "1089641,1433756")
+url_league_raw = query_params.get("league", "")
+url_league_ids = []
+if url_league_raw:
+    for item in str(url_league_raw).split(","):
+        item = item.strip()
+        if item.isdigit() and int(item) > 0:
+            url_league_ids.append(int(item))
+
 st.sidebar.title("⚙️ FPL Settings")
 input_team_id = st.sidebar.number_input(
     "กรอก Team ID ของคุณ:",
-    value=MY_TEAM_ID if MY_TEAM_ID > 0 else 0,
+    value=default_team_val if default_team_val > 0 else 0,
     step=1,
     help="ดู Team ID ได้จาก URL บนเว็บ FPL ในหน้า Points (เช่น /entry/XXXXXX/event/...)"
 )
-# input_league_id = st.sidebar.number_input("Mini-League ID (ถ้าต้องการดู EO):", value=0, step=1, help="กรอก Classic League ID จากหน้าเว็บ FPL")
+
+# ซิงก์ Team ID ลง URL Query Params อัตโนมัติ (Bookmark หรือแชร์ให้เพื่อนได้ทันที)
+if input_team_id > 0:
+    st.query_params["team"] = str(input_team_id)
+elif "team" in st.query_params:
+    del st.query_params["team"]
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎯 ปรับแต่งโมเดล")
 
-enable_chips = st.sidebar.checkbox("🤖 อนุญาตให้บอตแนะนำการใช้ชิป", value=True)
+horizon_slider = st.sidebar.slider("📅 วางแผนล่วงหน้า (Gameweeks):", 1, 5, 3, 1, help="เลือกระยะเวลาที่ต้องการให้ระบบวางแผนและจำลอง (1 ถึง 5 สัปดาห์)")
 xg_slider = st.sidebar.slider("⚡ น้ำหนักเกมรุก (xG & xA):", 0.5, 2.0, 1.15, 0.05)
 cs_slider = st.sidebar.slider("🛡️ น้ำหนักเกมรับ (Clean Sheet):", 0.0, 2.0, 0.85, 0.05)
 
@@ -196,15 +361,113 @@ if st.sidebar.button("🔄 ดึงข้อมูลและคำนวณ�
     st.rerun()
 
 if input_team_id <= 0:
-    st.info("👈 กรุณากรอก **Team ID** ของคุณในแถบด้านซ้ายเพื่อเริ่มการวิเคราะห์")
+    st.info("👈 กรุณากรอก **Team ID** ของคุณในแถบด้านซ้าย หรือเปิดลิงก์แบบ `?team=XXXXXX` เพื่อเริ่มการวิเคราะห์")
     st.stop()
 
 try:
-    players, my_team_ids, bank, initial_ft, target_gws, chips_available, deadline_info, dgw_bgw_info = load_data(
-        input_team_id, xg_slider, cs_slider
-    )
+    with st.spinner("⚡ โหลดข้อมูลตลาดนักเตะและคำนวณ xP..."):
+        global_market = load_global_market(xg_slider, cs_slider, horizon_slider)
+    with st.spinner(f"👤 ดึงข้อมูลไลน์อัปทีมของคุณ (Team ID: {input_team_id})..."):
+        players, my_team_ids, bank, initial_ft, target_gws, chips_available, deadline_info, dgw_bgw_info = load_user_squad(
+            input_team_id, global_market
+        )
     my_squad = [p for p in players if p["id"] in my_team_ids]
     squad_value = sum(p["sell_price"] for p in my_squad)
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🔄 โควตาย้ายตัว & แต้มลบ")
+
+    custom_ft = st.sidebar.number_input(
+        "🔄 Free Transfers ในมือ (1-5 ใบ):",
+        min_value=1,
+        max_value=5,
+        value=int(initial_ft),
+        step=1,
+        help="คำนวณสะสมให้อัตโนมัติจากประวัติ FPL ฤดูกาล 2024/25 หรือปรับตามจำนวนจริงในมือคุณ"
+    )
+
+    hit_policies = {
+        "🛡️ ห้ามติดลบเด็ดขาด (0 Hits / ฟรีเท่านั้น)": 0,
+        "⚠️ ยอมติดลบได้ไม่เกิน 1 ครั้ง (-4 pts)": 1,
+        "🚨 ยอมติดลบได้ไม่เกิน 2 ครั้ง (-8 pts)": 2,
+        "🤖 ให้โมเดลคำนวณเอง (Auto Risk Hurdle 6.5 pts)": None,
+    }
+    selected_hit_label = st.sidebar.selectbox(
+        "นโยบายการยอมเสียแต้มลบ (Hits Policy):",
+        options=list(hit_policies.keys()),
+        index=0,
+        help="แนะนำเลือก 'ห้ามติดลบเด็ดขาด' เพื่อหยุดการเสียคะแนนฟรีจากการย้ายตัวพร่ำเพรื่อ"
+    )
+    max_hits_allowed = hit_policies[selected_hit_label]
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🎛️ กลยุทธ์การบริหารชิป (Chips Strategy)")
+
+    next_gw = target_gws[0]
+    if next_gw < 20:
+        wc_weeks_left = 20 - next_gw
+        st.sidebar.warning(f"⏳ **Wildcard 1:** หมดอายุสิ้นสุด GW 19 (เหลืออีก {wc_weeks_left} สัปดาห์ หากไม่ใช้จะถูกตัดสิทธิ์)")
+    else:
+        st.sidebar.info("✨ **Wildcard 2:** มีผลใช้งานจนจบฤดูกาล (GW 38)")
+
+    chip_action = st.sidebar.radio(
+        "เลือกรูปแบบการใช้ชิป:",
+        [
+            "🤖 ให้บอตคิดให้ (Smart Auto)",
+            "⚡ บังคับใช้ชิปในสัปดาห์นี้เลย (ติ๊กแล้วใช้ทันที)",
+            "🛡️ ปิดการใช้ชิปทั้งหมด (Save All Chips)"
+        ],
+        index=0,
+        help="Smart Auto จะวิเคราะห์ความคุ้มค่าให้เอง / ถ้าต้องการใช้ชิปในสัปดาห์นี้ทันทีให้เลือกข้อ 2"
+    )
+
+    forced_chip = None
+    allowed_chips_list = []
+
+    if chip_action == "🤖 ให้บอตคิดให้ (Smart Auto)":
+        has_bgw = any(len(info.get("bgw", [])) >= 2 for info in dgw_bgw_info.values()) if dgw_bgw_info else False
+        has_dgw = any(len(info.get("dgw", [])) >= 1 for info in dgw_bgw_info.values()) if dgw_bgw_info else False
+
+        auto_allowed = []
+        if has_dgw:
+            auto_allowed.extend(["TC", "BB"])
+        if has_bgw:
+            auto_allowed.append("FH")
+        # Wildcard 1: หากเหลือเวลาไม่เกิน 4 สัปดาห์ก่อนหมดอายุ (GW 16 เป็นต้นไป) ปลดล็อกให้พิจารณาใช้
+        if 16 <= next_gw < 20:
+            auto_allowed.append("WC")
+
+        allowed_chips_list = [c for c in auto_allowed if chips_available.get(c, False)]
+        if not allowed_chips_list:
+            st.sidebar.caption("🛡️ **สถานะ Auto:** สัปดาห์ปกติ ประเมินแล้วไม่คุ้มที่จะเผาชิปทิ้ง แนะนำเก็บไว้รอบ DGW/BGW")
+        else:
+            st.sidebar.caption(f"🎯 **สถานะ Auto:** ตรวจสอบชิปที่มีโอกาสคุ้มค่า: {', '.join(allowed_chips_list)}")
+
+    elif chip_action == "⚡ บังคับใช้ชิปในสัปดาห์นี้เลย (ติ๊กแล้วใช้ทันที)":
+        chip_labels = {
+            "WC": "Wildcard (WC) - ยกเครื่อง 15 คนใหม่ทันที",
+            "TC": "Triple Captain (TC) - กัปตันแต้ม x3",
+            "BB": "Bench Boost (BB) - นับแต้มตัวสำรองทุกคน",
+            "FH": "Free Hit (FH) - สลับทีมชั่วคราว 1 นัด",
+        }
+        avail_options = [label for c, label in chip_labels.items() if chips_available.get(c, False)]
+        if not avail_options:
+            st.sidebar.error("❌ คุณไม่มีชิปเหลือให้ใช้งานแล้วในฤดูกาลนี้")
+            forced_chip = None
+            allowed_chips_list = []
+        else:
+            selected_chip_label = st.sidebar.selectbox("เลือกชิปที่ต้องการเปิดใช้ใน GW นี้:", options=avail_options)
+            for c, label in chip_labels.items():
+                if label == selected_chip_label:
+                    forced_chip = c
+                    allowed_chips_list = [c]
+                    st.sidebar.success(f"🚀 **เปิดใช้ {c} ใน GW {next_gw} ทันที!**")
+                    break
+
+    else:
+        allowed_chips_list = []
+        forced_chip = None
+        st.sidebar.caption("🔒 ปิดการใช้ชิปทุกชนิด")
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔒 กฎควบคุม (Lock & Ban)")
@@ -224,7 +487,7 @@ try:
     st.sidebar.markdown("---")
     st.sidebar.metric("💰 เงินในธนาคาร (Bank)", f"£{bank:.1f}M")
     st.sidebar.metric("🛡️ มูลค่าทีม (Squad Value)", f"£{squad_value:.1f}M")
-    st.sidebar.metric("🔄 Free Transfers", f"{initial_ft}")
+    st.sidebar.metric("🔄 Free Transfers ที่ใช้คำนวณ", f"{custom_ft} ใบ")
 
     # HEADER & DGW/BGW ALERTS
     render_deadline_banner(deadline_info["deadline_utc"], deadline_info["name"])
@@ -266,10 +529,28 @@ try:
 
         with st.spinner("กำลังแก้สมการหาส่วนผสมที่ดีที่สุด..."):
             plans = solve_multi_period_fpl(
-                players, my_team_ids, bank, initial_ft, target_gws, chips_available,
-                enable_chips=enable_chips, locked_player_ids=locked_ids, banned_player_ids=banned_ids,
-                dgw_bgw_info=dgw_bgw_info
+                players, my_team_ids, bank, custom_ft, target_gws, chips_available,
+                enable_chips=True, locked_player_ids=locked_ids, banned_player_ids=banned_ids,
+                dgw_bgw_info=dgw_bgw_info, max_hits_per_gw=max_hits_allowed,
+                allowed_chips=allowed_chips_list, forced_chip=forced_chip
             )
+
+        # Roadmap สรุปเส้นทางกลยุทธ์และการจัดสรรงบประมาณ
+        render_strategic_roadmap(plans)
+
+        # บทวิเคราะห์เหตุผลเรื่องการใช้หรือเก็บชิป
+        with st.expander("💡 **บทวิเคราะห์การบริหารชิปจากสมองกล (Chip Strategic Advisor)**", expanded=False):
+            if plans[0]["chip"]:
+                st.success(f"🔥 **เปิดใช้งาน {plans[0]['chip']} ในสัปดาห์นี้:** โมเดลคำนวณไลน์อัปที่ดีที่สุดสำหรับชิปนี้ให้เรียบร้อยแล้ว")
+            else:
+                st.info("""
+                🛡️ **ทำไมระบบถึงแนะนำให้ 'เก็บชิป' ในสัปดาห์นี้?**
+                * **ไม่มี Double Gameweek:** สัปดาห์นี้ทุกทีมเตะนัดเดียว (Single GW) การเก็บ Triple Captain และ Bench Boost ไว้ใช้รอบสัปดาห์เตะ 2 นัด (DGW) ในครึ่งฤดูกาลหลังจะได้แต้มคุ้มค่ากว่ามหาศาล
+                * **โครงสร้างทีมเดิมแข็งแกร่ง:** ตัวจริง 11 คนของคุณมีโปรแกรมแข่งที่ดี และทีมมีเงินในคลัง **£4.2M** แผนการย้ายตัวตามโควตาฟรี (1 FT) ทำแต้มคาดหวังได้สูงถึง **81.8 pts** โดยไม่ต้องสิ้นเปลืองชิปสำคัญ
+                * **การรักษา Wildcard 1:** Wildcard ใบแรกมีอายุถึง GW 19 ควรรอใช้ตอนที่มีปัญหาตัวเจ็บสะสมหลายคน หรือตอนโปรแกรมแข่งของทีมใหญ่เปลี่ยนขั้วพร้อมกัน
+                
+                *👉 หากต้องการดูไลน์อัป 15 ตัวที่ดีที่สุดกรณีใช้ชิปทันที สามารถเลือก **'🚀 บังคับใช้ชิป...'** ได้ที่เมนูด้านซ้ายมือ*
+                """)
 
         # สลับเป็น Sub-Tabs แทน st.columns เพื่อให้แสดงผลเต็มหน้าจอมือถือ
         gw_tab_labels = [
@@ -320,8 +601,8 @@ try:
                             "นักเตะ": f"{p['web_name']}{role}{lock_badge}{dgw_str}",
                             "ทีม": p["team"],
                             "คู่แข่ง": p["fixtures"].get(gw, "-"),
-                            "xMins": f"{p['xmins']} น.",
-                            "ความเสี่ยง": p["risk"],
+                            "xMins": f"{p.get('xmins_by_gw', {}).get(gw, p['xmins'])} น.",
+                            "ความเสี่ยง": p.get("risk_by_gw", {}).get(gw, p["risk"]),
                             "xP": p["xp_by_gw"][gw]
                         })
                     st.dataframe(pd.DataFrame(starters_data), hide_index=True, width='stretch')
@@ -339,8 +620,8 @@ try:
                                 "ลำดับ": label,
                                 "นักเตะ": f"{p['web_name']}{lock_badge}{dgw_str}",
                                 "คู่แข่ง": p["fixtures"].get(gw, "-"),
-                                "xMins": f"{p['xmins']} น.",
-                                "ความเสี่ยง": p["risk"],
+                                "xMins": f"{p.get('xmins_by_gw', {}).get(gw, p['xmins'])} น.",
+                                "ความเสี่ยง": p.get("risk_by_gw", {}).get(gw, p["risk"]),
                                 "xP": p["xp_by_gw"][gw]
                             })
                         st.dataframe(pd.DataFrame(bench_data), hide_index=True, width='stretch')
@@ -472,21 +753,41 @@ try:
         with tab5:
             st.subheader("🏆 วิเคราะห์คู่แข่งใน Mini-League และ Effective Ownership (EO)")
 
+            # สร้างตัวเลือกมินิลีก (รวมทั้งจาก URL และค่า Default)
+            league_options = {}
+            if url_league_ids:
+                for idx, lid in enumerate(url_league_ids, 1):
+                    league_options[f"🔗 มินิลีกจาก URL #{idx} (ID: {lid})"] = lid
+
+            for name, lid in DEFAULT_LEAGUES.items():
+                if lid > 0 and lid not in url_league_ids:
+                    league_options[name] = lid
+
+            league_options["✏️ กรอก League ID อื่นๆ เอง"] = 0
+
             # ตัวเลือกสลับมินิลีก
             sel_col1, sel_col2 = st.columns([2, 1])
             with sel_col1:
                 selected_league_label = st.selectbox(
                     "🎯 เลือก Mini-League ที่ต้องการวิเคราะห์:",
-                    options=list(DEFAULT_LEAGUES.keys()),
+                    options=list(league_options.keys()),
                     index=0
                 )
 
-            active_league_id = DEFAULT_LEAGUES[selected_league_label]
+            active_league_id = league_options[selected_league_label]
 
             # กรณีเลือก "กรอก League ID อื่นๆ เอง"
             if active_league_id == 0:
                 with sel_col2:
                     active_league_id = st.number_input("ระบุ League ID:", value=0, step=1)
+
+            # Sync ค่า League ID ลง URL Query Params
+            if active_league_id > 0:
+                if url_league_ids and active_league_id not in url_league_ids:
+                    combined = [str(active_league_id)] + [str(x) for x in url_league_ids]
+                    st.query_params["league"] = ",".join(combined)
+                elif not url_league_ids:
+                    st.query_params["league"] = str(active_league_id)
 
             if active_league_id <= 0:
                 st.info("💡 กรุณาระบุ Mini-League ID ที่ถูกต้องเพื่อเริ่มการวิเคราะห์")
@@ -582,5 +883,9 @@ try:
 
                     st.dataframe(pd.DataFrame(all_eo_list), hide_index=True, width='stretch')
 
+except FPLGameUpdatingError as e:
+    st.warning(f"⏳ **ระบบ FPL ปิดปรับปรุงชั่วคราวระหว่างแข่งขัน (Game Updating):**\n\n{e}\n\n*โดยปกติระบบ FPL จะปิดระบบชั่วคราวก่อนและหลังจบการแข่งขันแต่ละนัดเพื่อประมวลผลคะแนน กรุณาลองใหม่อีกครั้งเมื่อระบบเปิดทำการ*")
+except ValueError as e:
+    st.error(f"❌ {e}\n\n*กรุณาตรวจสอบว่าระบุ FPL Team ID ถูกต้องหรือไม่*")
 except Exception as e:
     st.error(f"เกิดข้อผิดพลาดในการคำนวณ: {e}")

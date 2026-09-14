@@ -4,28 +4,60 @@ from config import (
     HIT_PENALTY_COST, MAX_PLAYERS_PER_TEAM, TOTAL_SQUAD_SIZE, STARTING_XI_SIZE
 )
 
-def filter_candidate_pool(players: list, my_player_ids: list, locked_player_ids: list = None) -> list:
+def filter_candidate_pool(players: list, my_player_ids: list, locked_player_ids: list = None, max_per_pos: tuple = (12, 35, 45, 25)) -> list:
     locked_set = set(locked_player_ids or [])
-    active_pool = []
+    my_set = set(my_player_ids)
 
+    # ผู้เล่นในทีมปัจจุบันและผู้เล่นที่ถูก Lock ต้องอยู่ใน Candidate Pool เสมอ 100%
+    must_include = [p for p in players if p["id"] in my_set or p["id"] in locked_set]
+    must_ids = {p["id"] for p in must_include}
+
+    candidates_by_pos = {1: [], 2: [], 3: [], 4: []}
     for p in players:
-        if p["id"] in my_player_ids or p["id"] in locked_set:
-            active_pool.append(p)
+        if p["id"] in must_ids:
             continue
+        # ตัดตัวที่เจ็บยาว/โดนแบนยาว และไม่มีโอกาสได้แต้มออก
+        if p.get("status") in ["u", "i"] and p.get("xmins", 0) < 15.0:
+            continue
+        pos = p.get("pos_id", 3)
+        if pos in candidates_by_pos:
+            candidates_by_pos[pos].append(p)
 
-        total_xp = sum(p["xp_by_gw"].values())
-        is_viable_scorer = (total_xp >= 2.5 and p["xmins"] >= 20.0)
-        is_budget_enabler = (p["buy_price"] <= 4.5 and p["xmins"] >= 45.0)
+    selected = list(must_include)
+    pos_limits = {1: max_per_pos[0], 2: max_per_pos[1], 3: max_per_pos[2], 4: max_per_pos[3]}
 
-        if is_viable_scorer or is_budget_enabler:
-            active_pool.append(p)
+    for pos, cands in candidates_by_pos.items():
+        # เรียงลำดับตาม Total xP ตลอดช่วง Gameweek + ฟอร์มปัจจุบัน
+        cands.sort(
+            key=lambda p: (
+                sum(p["xp_by_gw"].values()) if p.get("xp_by_gw") else 0.0
+            ) + (p.get("form", 0.0) * 0.5),
+            reverse=True
+        )
+        limit = pos_limits.get(pos, 30)
+        top_players = cands[:limit]
 
-    return active_pool
+        # รับประกันตัวเลือกสายประหยัด (Budget Enablers) ชั้นดีเพื่อให้ระบบหมุนเงินได้ยืดหยุ่น
+        budget_cutoff = {1: 4.2, 2: 4.5, 3: 5.2, 4: 5.5}.get(pos, 4.5)
+        budget_options = [
+            p for p in cands
+            if p.get("buy_price", 99.0) <= budget_cutoff and p.get("xmins", 0) >= 45.0
+        ][:6]
+
+        combined = {p["id"]: p for p in top_players}
+        for b in budget_options:
+            combined[b["id"]] = b
+
+        selected.extend(combined.values())
+
+    return selected
+
 
 def solve_multi_period_fpl(
     players, my_player_ids, bank, initial_ft, target_gws, chips_available: dict,
     enable_chips: bool = True, locked_player_ids: list = None, banned_player_ids: list = None,
-    dgw_bgw_info: dict = None
+    dgw_bgw_info: dict = None, max_hits_per_gw: int = None, allowed_chips: list = None,
+    forced_chip: str = None
 ):
     locked_ids = set(locked_player_ids or [])
     banned_ids = set(banned_player_ids or [])
@@ -55,8 +87,12 @@ def solve_multi_period_fpl(
             tin_vars[(pid, gw)] = pulp.LpVariable(f"tin_{pid}_{gw}", cat="Binary")
             tout_vars[(pid, gw)] = pulp.LpVariable(f"tout_{pid}_{gw}", cat="Binary")
 
-    # 2. ตัวแปร Chips
-    chip_types = [c for c, avail in chips_available.items() if avail and enable_chips]
+    # 2. ตัวแปร Chips พร้อมควบคุมสิทธิ์เจาะจง
+    allowed_chip_set = set(allowed_chips) if allowed_chips is not None else None
+    chip_types = [
+        c for c, avail in chips_available.items()
+        if avail and enable_chips and (allowed_chip_set is None or c in allowed_chip_set)
+    ]
     chip_vars = {}
     for c in chip_types:
         for gw in target_gws:
@@ -84,9 +120,11 @@ def solve_multi_period_fpl(
     for idx, gw in enumerate(target_gws):
         discount = DISCOUNT_FACTOR ** idx
 
+        # เสริมแต้ม Upside ให้ตัวรุก (+0.12 pts) และการันตีรองกัปตันทีมเป็นตัวที่มี xP สูงสุดอันดับ 2 (+0.10 * vice_vars * xP)
         gw_points = pulp.lpSum([
-            start_vars[(p["id"], gw)] * p["xp_by_gw"][gw]
+            start_vars[(p["id"], gw)] * (p["xp_by_gw"][gw] + (0.12 if p["pos_id"] in [3, 4] else 0.0))
             + cap_vars[(p["id"], gw)] * p["xp_by_gw"][gw]
+            + 0.10 * vice_vars[(p["id"], gw)] * p["xp_by_gw"][gw]
             + 0.05 * (squad_vars[(p["id"], gw)] - start_vars[(p["id"], gw)]) * p["xp_by_gw"][gw]
             for p in filtered_players
         ])
@@ -115,7 +153,9 @@ def solve_multi_period_fpl(
             for c in chip_types
         ])
 
-        gw_net_points = gw_points - (HIT_PENALTY_COST * hits_vars[gw]) - chip_penalties
+        # ปรับ Hit Hurdle เป็น 6.5 แต้ม ป้องกันการย้ายตัวพร่ำเพรื่อเพื่อส่วนต่าง xP เล็กน้อย
+        effective_hit_penalty = max(HIT_PENALTY_COST, 6.5)
+        gw_net_points = gw_points - (effective_hit_penalty * hits_vars[gw]) - chip_penalties
         objective_terms.append(discount * gw_net_points)
 
     prob += pulp.lpSum(objective_terms)
@@ -126,6 +166,9 @@ def solve_multi_period_fpl(
             prob += pulp.lpSum([chip_vars[(c, gw)] for gw in target_gws]) <= 1
         for gw in target_gws:
             prob += pulp.lpSum([chip_vars[(c, gw)] for c in chip_types]) <= 1
+
+        if forced_chip and forced_chip in chip_types:
+            prob += chip_vars[(forced_chip, target_gws[0])] == 1
 
     if "TC" in chip_types:
         for gw in target_gws:
@@ -138,9 +181,18 @@ def solve_multi_period_fpl(
                 prob += tc_active[(pid, gw)] <= chip_vars[("TC", gw)]
                 prob += tc_active[(pid, gw)] >= cap_vars[(pid, gw)] + chip_vars[("TC", gw)] - 1
 
-                # DGW Captain Lockout: หากสัปดาห์นั้นมี DGW บังคับว่า TC ต้องติดให้นักเตะที่เตะเบิ้ลเท่านั้น
-                if has_dgw and not p.get("is_dgw", {}).get(gw, False):
-                    prob += tc_active[(pid, gw)] == 0
+            # Quality Guardrail: หากไม่ใช่สัปดาห์ DGW กัปตันที่ติด TC ต้องมี xP ไม่น้อยกว่า 9.0 แต้ม
+            if not has_dgw:
+                prob += pulp.lpSum([cap_vars[(p["id"], gw)] * p["xp_by_gw"][gw] for p in filtered_players]) >= 9.0 * chip_vars[("TC", gw)]
+
+    if "BB" in chip_types:
+        for gw in target_gws:
+            # BB Safety Guardrail: หากเปิด Bench Boost ใน GW นั้น สมาชิกในทีมอย่างน้อย 14 คนต้องมี xMins >= 50 นาที
+            # เพื่อป้องกันการเผาชิปทิ้งบนตัวสำรอง 0 นาที หรือตัวที่ไม่ได้ลงแข่ง
+            prob += pulp.lpSum([
+                squad_vars[(p["id"], gw)] * (1 if p.get("xmins_by_gw", {}).get(gw, p.get("xmins", 0)) >= 50.0 else 0)
+                for p in filtered_players
+            ]) >= 14 * chip_vars[("BB", gw)]
 
     current_team_value = sum(p["sell_price"] for p in filtered_players if p["id"] in my_player_ids)
     total_budget_cap = bank + current_team_value
@@ -171,7 +223,10 @@ def solve_multi_period_fpl(
         for tid in set(p["team_id"] for p in filtered_players):
             prob += pulp.lpSum([squad_vars[(p["id"], gw)] for p in filtered_players if p["team_id"] == tid]) <= MAX_PLAYERS_PER_TEAM
 
-        prob += pulp.lpSum([squad_vars[(p["id"], gw)] * p["buy_price"] for p in filtered_players]) <= total_budget_cap
+        # Dynamic Bank Balance (bank_vars[gw] >= 0) คุมกระแสเงินสดซื้อ-ขายตามจริงโดยไม่ลงโทษนักเตะเดิมที่ราคาขึ้น
+        # หากใช้ชิป Free Hit (is_fh = 1) จึงบังคับเพดานราคารวม buy_price ของ 15 คน
+        if "FH" in chip_types:
+            prob += pulp.lpSum([squad_vars[(p["id"], gw)] * p["buy_price"] for p in filtered_players]) <= total_budget_cap + 1000.0 * (1 - is_fh)
 
         # Permanent Squad 15 คน
         prob += pulp.lpSum([perm_squad_vars[(p["id"], gw)] for p in filtered_players]) == TOTAL_SQUAD_SIZE
@@ -239,6 +294,10 @@ def solve_multi_period_fpl(
         prob += hits_vars[gw] >= (total_in - ft_vars[gw]) - (20 * is_wc) - (20 * is_fh)
         prob += hits_vars[gw] <= 20 * has_hits_vars[gw]
 
+        # จำกัดจำนวนแต้มลบ (Hits) ตามนโยบายของผู้ใช้ (เช่น 0 = ห้ามติดลบเด็ดขาด)
+        if max_hits_per_gw is not None:
+            prob += hits_vars[gw] <= max_hits_per_gw
+
         prob += rem_ft_vars[gw] <= ft_vars[gw] - total_in + (20 * has_hits_vars[gw])
         prob += rem_ft_vars[gw] <= MAX_FREE_TRANSFERS * (1 - has_hits_vars[gw])
         prob += rem_ft_vars[gw] <= MAX_FREE_TRANSFERS * (1 - is_wc)
@@ -248,11 +307,17 @@ def solve_multi_period_fpl(
             prob += ft_vars[gw] <= rem_ft_vars[prev_gw] + 1 + (10 * prev_fh)
             prob += ft_vars[gw] <= 1 + 10 * (1 - prev_fh)
 
-    solver_cmd = pulp.PULP_CBC_CMD(msg=False, gapRel=0.005, timeLimit=12)
+    solver_cmd = pulp.PULP_CBC_CMD(msg=False, gapRel=0.01, timeLimit=20)
     prob.solve(solver_cmd)
 
-    if pulp.LpStatus[prob.status] != "Optimal":
-        raise ValueError("ไม่สามารถจัดทีมตามเงื่อนไขได้ (Infeasible) กรุณาตรวจสอบว่า Lock นักเตะเกินงบหรือเกินโควตาทีมหรือไม่")
+    status_name = pulp.LpStatus.get(prob.status, "Unknown")
+    has_solution = any(pulp.value(start_vars[(p["id"], target_gws[0])]) is not None for p in filtered_players)
+
+    if status_name != "Optimal" and not has_solution:
+        if prob.status == -1 or status_name == "Infeasible":
+            raise ValueError("ไม่สามารถจัดทีมตามเงื่อนไขได้ (Infeasible) กรุณาตรวจสอบว่า Lock นักเตะเกินงบหรือเกินโควตาทีมหรือไม่")
+        else:
+            raise ValueError(f"Solver หยุดทำงานก่อนพบผลลัพธ์ (สถานะ: {status_name}) กรุณาลด Horizon หรือปรับผ่อนปรนเงื่อนไข")
 
     # 8. สรุปแผน
     plans = []
@@ -283,10 +348,25 @@ def solve_multi_period_fpl(
         bench = [p for p in filtered_players if pulp.value(squad_vars[(p["id"], gw)]) == 1 and pulp.value(start_vars[(p["id"], gw)]) == 0]
         bench_gkp = [p for p in bench if p["pos_id"] == 1]
         bench_outfield = [p for p in bench if p["pos_id"] != 1]
-        bench_outfield.sort(key=lambda x: x["xp_by_gw"][gw], reverse=True)
+        # จัดลำดับม้านั่งสำรองอัจฉริยะ:
+        # ให้ความสำคัญกับความพร้อมลงสนามจริงก่อน (xMins >= 45.0) แล้วเรียงตาม xP สูงสุด
+        # เพื่อให้ Bench 1 เป็นตัวที่ลงมาเปลี่ยนทำแต้มแทนตัวจริงได้แน่นอนเมื่อเกิดเหตุฉุกเฉิน
+        bench_outfield.sort(
+            key=lambda x: (
+                1 if x.get("xmins_by_gw", {}).get(gw, x.get("xmins", 0)) >= 45.0 else 0,
+                x["xp_by_gw"][gw]
+            ),
+            reverse=True
+        )
 
         captain = next(p for p in filtered_players if pulp.value(cap_vars[(p["id"], gw)]) == 1)
         vice = next(p for p in filtered_players if pulp.value(vice_vars[(p["id"], gw)]) == 1)
+
+        cap_multiplier = 2 if active_chip == "TC" else 1
+        starters_xp = sum(p["xp_by_gw"][gw] for p in starters) + (captain["xp_by_gw"][gw] * cap_multiplier)
+        bench_xp = sum(p["xp_by_gw"][gw] for p in (bench_gkp + bench_outfield)) if active_chip == "BB" else 0.0
+        hits_deduction = int(pulp.value(hits_vars[gw])) * 4
+        gw_total_xp = round(starters_xp + bench_xp - hits_deduction, 2)
 
         plans.append({
             "gw": gw,
@@ -300,6 +380,7 @@ def solve_multi_period_fpl(
             "captain": captain,
             "vice_captain": vice,
             "bench": bench_gkp + bench_outfield,
+            "total_xp": gw_total_xp,
         })
 
     return plans
