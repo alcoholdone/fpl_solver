@@ -2,8 +2,24 @@ import streamlit as st
 import pandas as pd
 import textwrap
 from datetime import datetime, timezone, timedelta
+import importlib
+import fpl_api
+import optimizer
+import config
+
+# ป้องกันปัญหา Stale Cache ใน sys.modules ของ Streamlit Cloud เมื่อมีการ Deploy โค้ดใหม่
+if not hasattr(fpl_api, "fetch_fpl_global_market"):
+    importlib.reload(fpl_api)
+if not hasattr(optimizer, "solve_multi_period_fpl"):
+    importlib.reload(optimizer)
+
 from config import MY_TEAM_ID, DEFAULT_LEAGUES
-from fpl_api import fetch_fpl_global_market, fetch_fpl_user_squad, fetch_minileague_eo, FPLGameUpdatingError
+from fpl_api import (
+    fetch_fpl_global_market,
+    fetch_fpl_user_squad,
+    fetch_minileague_eo,
+    FPLGameUpdatingError,
+)
 from optimizer import solve_multi_period_fpl
 
 st.set_page_config(
