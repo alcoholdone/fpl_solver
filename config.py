@@ -27,6 +27,9 @@ MY_TEAM_ID = int(get_config_val("DEFAULT_TEAM_ID", 0))
 # การวางแผนระยะยาว (Multi-Gameweek)
 HORIZON_WEEKS = 3          # วางแผนล่วงหน้า 3 สัปดาห์
 DISCOUNT_FACTOR = 0.90     # อัตราลดทอนความไม่แน่นอนสัปดาห์ถัดๆ ไป (10%)
+FT_ROLL_VALUE = 1.5        # มูลค่าคาดหวังของการเก็บ Free Transfer ไว้ใช้สัปดาห์ถัดไป
+DGW_OUTFIELD_FATIGUE = 0.93  # ตัวคูณลดความฟิตผู้เล่นเอาต์ฟิลด์เมื่อเตะ 2 นัดในสัปดาห์เดียว
+CAPTAIN_DEF_CONFLICT_PENALTY = 0.6  # ลดแต้มเชิงกลยุทธ์เมื่อส่ง GKP/DEF ตัวจริงชนทีมของกัปตันตัวเอง
 
 # กติกา FPL มาตรฐาน
 MAX_FREE_TRANSFERS = 5

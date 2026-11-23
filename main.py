@@ -49,8 +49,26 @@ def display_multi_plan(plans: list):
 
 def main():
     try:
-        players, my_team, bank, initial_ft, target_gws, chips_available = fetch_fpl_data_multi(MY_TEAM_ID)
-        plans = solve_multi_period_fpl(players, my_team, bank, initial_ft, target_gws, chips_available, max_hits_per_gw=0)
+        (
+            players,
+            my_team,
+            bank,
+            initial_ft,
+            target_gws,
+            chips_available,
+            _deadline_info,
+            dgw_bgw_info,
+        ) = fetch_fpl_data_multi(MY_TEAM_ID)
+        plans = solve_multi_period_fpl(
+            players,
+            my_team,
+            bank,
+            initial_ft,
+            target_gws,
+            chips_available,
+            dgw_bgw_info=dgw_bgw_info,
+            max_hits_per_gw=0,
+        )
         display_multi_plan(plans)
     except Exception as err:
         print(f"\n[เกิดข้อผิดพลาดในการรันระบบ]: {err}")
